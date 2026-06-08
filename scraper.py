@@ -51,13 +51,18 @@ def _fetch_dept(ubigeo, nombre):
     return ubigeo, nombre, part, tot
 
 def fetch_data():
+    EXT_THRESHOLD = 50.0  # % mínimo de actas extranjero para usar datos reales
+
     with ThreadPoolExecutor(max_workers=30) as pool:
-        fut_nat  = pool.submit(_get, f"{BASE}/resumen-general/totales?idEleccion=10&tipoFiltro=eleccion")
-        fut_ext  = pool.submit(_get, f"{BASE}/resumen-general/totales?idAmbitoGeografico=2&idEleccion=10")
+        fut_nat      = pool.submit(_get, f"{BASE}/resumen-general/totales?idEleccion=10&tipoFiltro=eleccion")
+        fut_ext_tot  = pool.submit(_get, f"{BASE}/resumen-general/totales?idAmbitoGeografico=2&idEleccion=10")
+        fut_ext_part = pool.submit(_get, f"{BASE}/eleccion-presidencial/participantes-ubicacion-geografica-nombre"
+                                        f"?idEleccion=10&tipoFiltro=eleccion&idAmbitoGeografico=2")
         dept_futs = [pool.submit(_fetch_dept, ub, nm) for ub, nm in DEPTS.items()]
-        nat_raw  = fut_nat.result()
-        ext_raw  = fut_ext.result()
-        dept_res = [f.result() for f in dept_futs]
+        nat_raw      = fut_nat.result()
+        ext_raw      = fut_ext_tot.result()
+        ext_part_raw = fut_ext_part.result()
+        dept_res     = [f.result() for f in dept_futs]
 
     if not nat_raw:
         return None
@@ -75,6 +80,22 @@ def fetch_data():
         ext_total = ext_raw.get("totalActas", 2543)
         ext_proc  = ext_raw.get("contabilizadas", 0)
         ext_pct   = ext_raw.get("actasContabilizadas", 0)
+
+    # Extraer proporción real del extranjero si hay suficientes datos
+    ext_keiko_real = None
+    if ext_pct >= EXT_THRESHOLD and ext_part_raw:
+        cands = ext_part_raw if isinstance(ext_part_raw, list) else []
+        ek = next((c for c in cands if "FUJIMORI" in c.get("nombreCandidato","").upper()), None)
+        es = next((c for c in cands if "SÁNCHEZ" in c.get("nombreCandidato","").upper()
+                   or "SANCHEZ" in c.get("nombreCandidato","").upper()), None)
+        ekv = ek.get("totalVotosValidos", 0) if ek else 0
+        esv = es.get("totalVotosValidos", 0) if es else 0
+        if ekv + esv > 0:
+            ext_keiko_real = ekv / (ekv + esv)  # proporción real
+
+    # Modo: "real" si hay ≥50% extranjero, "supuesto" si no
+    usar_real = ext_keiko_real is not None
+    ext_keiko_pct = ext_keiko_real if usar_real else 0.60  # supuesto 60/40
 
     departamentos = {}
     for ubigeo, nombre, part, tot in dept_res:
@@ -108,18 +129,39 @@ def fetch_data():
     net_pend = sum(d["actas_pendientes"] * 175 * (d["keiko_pct"] - d["sanchez_pct"]) / 100
                    for d in departamentos.values())
     net_jee  = 935 * 219 * (63.5 - 36.5) / 100 + 69 * 213 * (65.6 - 34.4) / 100
-    proj = {}
-    for lbl, pct in [("55", 0.55), ("60", 0.60), ("65", 0.65)]:
-        proj[f"keiko_{lbl}pct"] = round(lead + net_pend + net_jee + total_ext_v * (2*pct - 1))
+
+    # Proyecciones usando proporción real o supuesto según disponibilidad
+    remaining_ext_v = total_ext_v * (1 - ext_pct / 100)  # votos extranjero aún sin contar
+    if usar_real:
+        # Con datos reales: proyectar solo los votos restantes con la proporción observada
+        net_ext_base = total_ext_v * (2 * ext_keiko_pct - 1)
+        proj = {
+            "keiko_real":  round(lead + net_pend + net_jee + net_ext_base),
+            "keiko_55pct": round(lead + net_pend + net_jee + total_ext_v * (2*0.55 - 1)),
+            "keiko_60pct": round(lead + net_pend + net_jee + total_ext_v * (2*0.60 - 1)),
+            "keiko_65pct": round(lead + net_pend + net_jee + total_ext_v * (2*0.65 - 1)),
+        }
+    else:
+        net_ext_base = total_ext_v * (2 * 0.60 - 1)
+        proj = {
+            "keiko_55pct": round(lead + net_pend + net_jee + total_ext_v * (2*0.55 - 1)),
+            "keiko_60pct": round(lead + net_pend + net_jee + net_ext_base),
+            "keiko_65pct": round(lead + net_pend + net_jee + total_ext_v * (2*0.65 - 1)),
+        }
+
     be    = 0.5 - (lead + net_pend + net_jee) / (2 * total_ext_v) if total_ext_v else 0.5
     sigma = math.sqrt((0.05*total_ext_v)**2 + (0.05*914*175)**2 + (0.05*305*175)**2 + 15000**2)
-    base  = proj["keiko_60pct"]
+    base  = proj.get("keiko_real", proj["keiko_60pct"])
 
     return {
         "timestamp": datetime.datetime.now().isoformat(),
         "nacional": {"total_actas": nac_total, "actas_contabilizadas": nac_proc,
                      "actas_jee": nac_jee, "actas_pendientes": nac_pend, "actas_pct": round(nac_pct, 3)},
-        "extranjero": {"total_actas": ext_total, "actas_proc": ext_proc, "actas_pct": round(ext_pct,1)},
+        "extranjero": {
+            "total_actas": ext_total, "actas_proc": ext_proc, "actas_pct": round(ext_pct, 1),
+            "usar_real": usar_real,
+            "keiko_pct_real": round(ext_keiko_real * 100, 2) if usar_real else None,
+        },
         "departamentos": departamentos,
         "analysis": {
             "keiko_total": total_k, "sanchez_total": total_s, "lead": lead,
@@ -144,17 +186,44 @@ def generar_html(data):
     lead_color = "#f97316" if lead > 0 else "#8b5cf6"
     lead_winner = "KEIKO" if lead > 0 else "SÁNCHEZ"
 
-    p55 = a["proyecciones"]["keiko_55pct"]
-    p60 = a["proyecciones"]["keiko_60pct"]
-    p65 = a["proyecciones"]["keiko_65pct"]
-    be  = a["breakeven_pct"]
+    ext  = data["extranjero"]
+    usar_real    = ext.get("usar_real", False)
+    ext_pct_val  = ext.get("actas_pct", 0)
+    ext_k_real   = ext.get("keiko_pct_real")
+
+    p55    = a["proyecciones"]["keiko_55pct"]
+    p60    = a["proyecciones"]["keiko_60pct"]
+    p65    = a["proyecciones"]["keiko_65pct"]
+    p_real = a["proyecciones"].get("keiko_real")
+    be     = a["breakeven_pct"]
     ic_inf = a["ic95_inf"]
     ic_sup = a["ic95_sup"]
+
+    if usar_real:
+        ext_badge = (f'<span style="background:#16a34a;color:#fff;padding:.15rem .5rem;border-radius:99px;font-size:.75rem;font-weight:600">'
+                     f'✓ DATOS REALES ({ext_pct_val:.1f}% contabilizado — {ext_k_real:.1f}% Keiko)</span>')
+        ext_nota  = f"Usando proporción real del extranjero: <strong>{ext_k_real:.1f}% Keiko / {100-ext_k_real:.1f}% Sánchez</strong> ({ext_pct_val:.1f}% de actas computadas)."
+    else:
+        ext_badge = (f'<span style="background:#92400e;color:#fde68a;padding:.15rem .5rem;border-radius:99px;font-size:.75rem;font-weight:600">'
+                     f'⚠ SUPUESTO 60/40 ({ext_pct_val:.1f}% contabilizado — activa cuando llegue a 50%)</span>')
+        ext_nota  = f"Extranjero: solo {ext_pct_val:.1f}% de actas contabilizadas. <strong>Supuesto 60/40 activo</strong> hasta llegar al 50%."
 
     def fmt(v): return f"+{v:,}" if v >= 0 else f"{v:,}"
     def win(v):
         w = "Keiko" if v > 0 else "Sánchez"
         return f"{w} gana por {abs(v)/18_000_000*100:.3f}pp"
+
+    if usar_real and p_real is not None and ext_k_real is not None:
+        real_scenario_html = (
+            f'<div class="sc sc-k" style="border-left:3px solid #22c55e;background:#14532d22">'
+            f'<div><div class="scname" style="color:#4ade80">'
+            f'✓ Proyección con datos reales ({ext_k_real:.1f}% Keiko extran.)</div>'
+            f'<div class="scsub">Calculado con {ext_pct_val:.1f}% de actas del exterior ya contabilizadas</div></div>'
+            f'<div style="text-align:right"><div class="scm" style="color:#4ade80">{fmt(p_real)}</div>'
+            f'<div class="scw">{win(p_real)}</div></div></div>'
+        )
+    else:
+        real_scenario_html = ""
 
     rows = ""
     for ub, d in sorted(deps.items(), key=lambda x: -x[1]["keiko_votos"]):
@@ -265,7 +334,7 @@ def generar_html(data):
       <div class="ai">
         <span>Pendientes dom.: <strong>~{max(dom_pend,0):,} actas</strong></span>
         <span>JEE: <strong>{nac["actas_jee"]:,} actas</strong></span>
-        <span>Extranjero: <strong>2,543 actas (0%)</strong></span>
+        <span>Extranjero: <strong>{ext["total_actas"]:,} actas ({ext_pct_val:.1f}%)</strong></span>
       </div>
     </div>
     <div class="adanger">
@@ -295,8 +364,8 @@ def generar_html(data):
         <div class="csub">Net: {fmt(a["net_pendientes"])} para Keiko<br>Cusco −29k · Ayacucho −21k · Loreto +16k</div></div>
       <div class="card cb"><div class="clabel">JEE impugnadas</div><div class="cval">{nac["actas_jee"]:,}</div>
         <div class="csub">Net: {fmt(a["net_jee"])} para Keiko<br>Lima 935 actas · Callao 69 actas</div></div>
-      <div class="card co"><div class="clabel">Extranjero (0%)</div><div class="cval">2,543</div>
-        <div class="csub">≈508,600 votos totales<br><strong style="color:#fbbf24">Break-even: {be}% Keiko / {100-be:.1f}% Sánchez</strong></div></div>
+      <div class="card co"><div class="clabel">Extranjero {ext_badge}</div><div class="cval">{ext["total_actas"]:,}</div>
+        <div class="csub">≈{ext["total_actas"]*200:,} votos totales<br><strong style="color:#fbbf24">Break-even: {be}% Keiko / {100-be:.1f}% Sánchez</strong></div></div>
       <div class="card cr"><div class="clabel">Ventaja actual</div><div class="cval">{lead_str}</div>
         <div class="csub">{abs(lead)/18_000_000*100:.3f}pp — Una de las más reñidas del siglo</div></div>
     </div>
@@ -305,6 +374,7 @@ def generar_html(data):
   <div class="section">
     <div class="stitle">Escenarios de proyección</div>
     <div class="scenarios">
+      {real_scenario_html}
       <div class="sc sc-k"><div><div class="scname">Optimista Keiko (65% extran.)</div></div>
         <div style="text-align:right"><div class="scm" style="color:#f97316">{fmt(p65)}</div><div class="scw">{win(p65)}</div></div></div>
       <div class="sc sc-k"><div><div class="scname">Base — 60/40 extranjero</div><div class="scsub">Supuesto del análisis</div></div>
@@ -345,10 +415,10 @@ def generar_html(data):
     <div class="stitle">Conclusión</div>
     <div class="conclusion">
       <h3>Veredicto — {nac["actas_pct"]:.3f}% actas · Carrera al filo</h3>
-      <p>Con solo <strong>{lead_str} votos</strong> ({abs(lead)/18_000_000*100:.3f}pp), la elección la decide el <strong>voto extranjero</strong> (≈508,600 sin contar).</p>
-      <p>Proyección base 60/40: <strong>Keiko {fmt(p60)}</strong>. Break-even: {be}% Keiko. Si Sánchez supera {100-be:.1f}% en exterior, gana sin condiciones adicionales.</p>
+      <p>Con solo <strong>{lead_str} votos</strong> ({abs(lead)/18_000_000*100:.3f}pp), la elección la decide el <strong>voto extranjero</strong> (≈{ext["total_actas"]*200:,} sin contar).</p>
+      <p>{"Proyección con datos reales: <strong>Keiko " + fmt(p_real) + "</strong>. " if usar_real else "Proyección base 60/40: <strong>Keiko " + fmt(p60) + "</strong>. "}Break-even: {be}% Keiko. Si Sánchez supera {100-be:.1f}% en exterior, gana sin condiciones adicionales.</p>
       <p>JEE ({fmt(a["net_jee"])} Keiko) y pendientes domésticos ({fmt(a["net_pendientes"])}) casi se compensan. El extranjero es el único bloque que puede cambiar el resultado.</p>
-      <div class="note"><strong>Nota:</strong> API oficial ONPE. Supuesto 60/40 extranjero definido por el usuario. Patrón 2021: Keiko obtuvo ~62–65% en exterior.</div>
+      <div class="note"><strong>Nota:</strong> API oficial ONPE. {ext_nota} Patrón 2021: Keiko obtuvo ~62–65% en exterior.</div>
     </div>
   </div>
 
