@@ -553,73 +553,120 @@ function buildCharts() {{
   if (chartsBuilt) return;
   chartsBuilt = true;
 
-  const labels = H.map(s => s.ts.slice(11));  // HH:MM
-  const leads  = H.map(s => s.lead);
-  const kpcts  = H.map(s => s.keiko_pct);
-  const spcts  = H.map(s => s.sanchez_pct);
-  const epcts  = H.map(s => s.ext_pct);
+  const gc = '#263044', tc = '#64748b';
 
-  const gridColor = '#1e293b';
-  const tickColor = '#64748b';
-  const baseOpts = {{
-    responsive: true,
-    plugins: {{ legend: {{ labels: {{ color: '#94a3b8', boxWidth: 12 }} }} }},
-    scales: {{
-      x: {{ ticks: {{ color: tickColor, maxTicksLimit: 12 }}, grid: {{ color: gridColor }} }},
-      y: {{ ticks: {{ color: tickColor }}, grid: {{ color: gridColor }} }}
-    }}
+  // Eje X siempre 0–100% actas procesadas, con tooltip que muestra hora
+  const xScale = {{
+    type: 'linear', min: 0, max: 100,
+    title: {{ display: true, text: '% actas nacionales procesadas', color: tc, font: {{ size: 11 }} }},
+    ticks: {{ color: tc, callback: v => v + '%' }},
+    grid: {{ color: gc }}
   }};
 
-  if (H.length < 2) {{
+  const baseOpts = (yLabel, yCallback) => ({{
+    responsive: true,
+    interaction: {{ mode: 'nearest', intersect: false }},
+    plugins: {{
+      legend: {{ labels: {{ color: '#94a3b8', boxWidth: 12, padding: 16 }} }},
+      tooltip: {{
+        callbacks: {{
+          title: items => 'Actas: ' + items[0].parsed.x.toFixed(3) + '%',
+          afterTitle: items => {{
+            const i = items[0].dataIndex;
+            return H[i] ? H[i].ts : '';
+          }}
+        }}
+      }}
+    }},
+    scales: {{
+      x: xScale,
+      y: {{ ticks: {{ color: tc, callback: yCallback }}, grid: {{ color: gc }},
+           title: {{ display: !!yLabel, text: yLabel, color: tc, font: {{ size: 11 }} }} }}
+    }}
+  }});
+
+  const hasData = H.length >= 1;
+
+  if (!hasData) {{
     ['lead','pcts','ext'].forEach(id => {{
       document.getElementById('chart-' + id).style.display = 'none';
       document.getElementById('empty-' + id).style.display = 'block';
     }});
   }} else {{
+    // Gráfico 1: Margen Keiko
+    const lastLead = H[H.length-1].lead;
     new Chart(document.getElementById('chart-lead'), {{
       type: 'line',
-      data: {{
-        labels,
-        datasets: [{{
-          label: 'Margen Keiko (votos)',
-          data: leads,
-          borderColor: leads[leads.length-1] > 0 ? '#f97316' : '#8b5cf6',
-          backgroundColor: leads[leads.length-1] > 0 ? '#f9731622' : '#8b5cf622',
-          fill: true, tension: 0.3, pointRadius: 4, pointHoverRadius: 6,
-        }}]
-      }},
-      options: {{...baseOpts, plugins: {{...baseOpts.plugins,
-        annotation: {{ annotations: {{ zero: {{ type: 'line', yMin: 0, yMax: 0, borderColor: '#475569', borderDash: [4,4] }} }} }}
-      }},
-      scales: {{...baseOpts.scales, y: {{...baseOpts.scales.y,
-        ticks: {{ color: tickColor, callback: v => v >= 0 ? '+' + v.toLocaleString() : v.toLocaleString() }}
-      }}}}
+      data: {{ datasets: [{{
+        label: 'Margen Keiko (votos)',
+        data: H.map((s,i) => ({{ x: s.pct, y: s.lead }})),
+        borderColor: lastLead >= 0 ? '#f97316' : '#8b5cf6',
+        backgroundColor: lastLead >= 0 ? '#f9731618' : '#8b5cf618',
+        fill: true, tension: 0.3, pointRadius: 5, pointHoverRadius: 7,
+        pointBackgroundColor: H.map(s => s.lead >= 0 ? '#f97316' : '#8b5cf6'),
+      }}] }},
+      options: {{
+        ...baseOpts('Votos de diferencia', v => (v >= 0 ? '+' : '') + v.toLocaleString()),
+        plugins: {{ ...baseOpts().plugins,
+          tooltip: {{
+            callbacks: {{
+              title: items => 'Actas: ' + items[0].parsed.x.toFixed(3) + '%',
+              afterTitle: items => H[items[0].dataIndex]?.ts ?? '',
+              label: items => (items.parsed.y >= 0 ? '+' : '') + items.parsed.y.toLocaleString() + ' votos Keiko',
+            }}
+          }}
+        }},
+        scales: {{
+          x: xScale,
+          y: {{
+            ticks: {{ color: tc, callback: v => (v >= 0 ? '+' : '') + v.toLocaleString() }},
+            grid: {{ color: (ctx) => ctx.tick.value === 0 ? '#475569' : gc }},
+            title: {{ display: true, text: 'Votos de diferencia', color: tc, font: {{ size: 11 }} }}
+          }}
+        }}
       }}
     }});
 
+    // Gráfico 2: % Keiko vs % Sánchez
     new Chart(document.getElementById('chart-pcts'), {{
       type: 'line',
-      data: {{
-        labels,
-        datasets: [
-          {{ label: 'Keiko %', data: kpcts, borderColor: '#f97316', backgroundColor: '#f9731622', fill: false, tension: 0.3, pointRadius: 4 }},
-          {{ label: 'Sánchez %', data: spcts, borderColor: '#8b5cf6', backgroundColor: '#8b5cf622', fill: false, tension: 0.3, pointRadius: 4 }},
-        ]
-      }},
-      options: {{...baseOpts, scales: {{...baseOpts.scales,
-        y: {{ ...baseOpts.scales.y, ticks: {{ color: tickColor, callback: v => v + '%' }}, suggestedMin: 48, suggestedMax: 52 }}
-      }}}}
+      data: {{ datasets: [
+        {{ label: 'Keiko %', data: H.map(s => ({{ x: s.pct, y: s.keiko_pct }})),
+           borderColor: '#f97316', backgroundColor: '#f9731618', fill: false, tension: 0.3, pointRadius: 5 }},
+        {{ label: 'Sánchez %', data: H.map(s => ({{ x: s.pct, y: s.sanchez_pct }})),
+           borderColor: '#8b5cf6', backgroundColor: '#8b5cf618', fill: false, tension: 0.3, pointRadius: 5 }},
+      ] }},
+      options: {{
+        ...baseOpts('% votos válidos', v => v.toFixed(2) + '%'),
+        scales: {{
+          x: xScale,
+          y: {{
+            ticks: {{ color: tc, callback: v => v.toFixed(2) + '%' }},
+            grid: {{ color: gc }},
+            title: {{ display: true, text: '% votos válidos', color: tc, font: {{ size: 11 }} }},
+            suggestedMin: 49, suggestedMax: 51,
+          }}
+        }}
+      }}
     }});
 
+    // Gráfico 3: Avance extranjero
     new Chart(document.getElementById('chart-ext'), {{
-      type: 'bar',
-      data: {{
-        labels,
-        datasets: [{{ label: 'Extranjero contabilizado %', data: epcts, backgroundColor: '#22c55e44', borderColor: '#22c55e', borderWidth: 1 }}]
-      }},
-      options: {{...baseOpts, scales: {{...baseOpts.scales,
-        y: {{ ...baseOpts.scales.y, ticks: {{ color: tickColor, callback: v => v + '%' }}, max: 100 }}
-      }}}}
+      type: 'line',
+      data: {{ datasets: [{{
+        label: 'Extranjero contabilizado %',
+        data: H.map(s => ({{ x: s.pct, y: s.ext_pct }})),
+        borderColor: '#22c55e', backgroundColor: '#22c55e22',
+        fill: true, tension: 0.2, pointRadius: 5,
+      }}] }},
+      options: {{
+        ...baseOpts('% actas exterior', v => v.toFixed(1) + '%'),
+        scales: {{
+          x: xScale,
+          y: {{ min: 0, max: 100, ticks: {{ color: tc, callback: v => v + '%' }}, grid: {{ color: gc }},
+               title: {{ display: true, text: '% actas exterior', color: tc, font: {{ size: 11 }} }} }}
+        }}
+      }}
     }});
   }}
 
@@ -627,7 +674,7 @@ function buildCharts() {{
   const tbody = document.getElementById('snap-tbody');
   [...H].reverse().forEach(s => {{
     const lead = s.lead >= 0 ? '+' + s.lead.toLocaleString() : s.lead.toLocaleString();
-    const lc   = s.lead >= 0 ? '#f97316' : '#8b5cf6';
+    const lc = s.lead >= 0 ? '#f97316' : '#8b5cf6';
     tbody.innerHTML += `<tr>
       <td style="text-align:left;color:#94a3b8">${{s.ts}}</td>
       <td>${{s.pct.toFixed(3)}}%</td>
