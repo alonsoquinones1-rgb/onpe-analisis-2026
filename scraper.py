@@ -115,18 +115,21 @@ def fetch_data():
         ajee = tot.get("enviadasJee", 0)
         apend = tot.get("pendientesJee", 0)
         apct  = tot.get("actasContabilizadas", 0)
+        avg_votos = round(tv / ap) if ap > 0 else 175
+        votos_pend_est = avg_votos * apend
         departamentos[ubigeo] = {
             "nombre": nombre, "keiko_votos": kv, "keiko_pct": round(kpct,1),
             "sanchez_votos": sv, "sanchez_pct": round(spct,1),
             "actas_total": at, "actas_procesadas": ap,
             "actas_jee": ajee, "actas_pendientes": apend, "pct_procesado": round(apct,1),
+            "avg_votos_acta": avg_votos, "votos_pend_est": votos_pend_est,
         }
 
     total_k = sum(d["keiko_votos"]   for d in departamentos.values())
     total_s = sum(d["sanchez_votos"] for d in departamentos.values())
     lead    = total_k - total_s
     total_ext_v = ext_total * 200
-    net_pend = sum(d["actas_pendientes"] * 175 * (d["keiko_pct"] - d["sanchez_pct"]) / 100
+    net_pend = sum(d["votos_pend_est"] * (d["keiko_pct"] - d["sanchez_pct"]) / 100
                    for d in departamentos.values())
     net_jee  = 935 * 219 * (63.5 - 36.5) / 100 + 69 * 213 * (65.6 - 34.4) / 100
 
@@ -233,11 +236,16 @@ def generar_html(data):
         diff_cls = "kd" if diff > 0 else "sd"
         pend = d["actas_pendientes"]
         pend_cls = 'class="pc"' if pend > 500 else ('class="ph"' if pend > 50 else "")
+        vpend = d["votos_pend_est"]
+        vpend_cls = 'class="pc"' if vpend > 80_000 else ('class="ph"' if vpend > 8_000 else "")
         rows += (f'<tr class="{wc}"><td class="dn">{d["nombre"]}</td>'
                  f'<td>{d["keiko_votos"]:,}</td><td class="kp">{d["keiko_pct"]}%</td>'
                  f'<td>{d["sanchez_votos"]:,}</td><td class="sp">{d["sanchez_pct"]}%</td>'
                  f'<td class="{diff_cls}">{diff_str}</td>'
-                 f'<td {pend_cls}>{pend}</td><td>{d["pct_procesado"]}%</td></tr>\n')
+                 f'<td {pend_cls}>{pend}</td>'
+                 f'<td {vpend_cls}>{"—" if pend == 0 else f"{vpend:,}"}</td>'
+                 f'<td class="nt">{d["avg_votos_acta"]}</td>'
+                 f'<td>{d["pct_procesado"]}%</td></tr>\n')
 
     dom_pend = nac["actas_pendientes"] - 1514 - 2543
 
@@ -352,7 +360,7 @@ def generar_html(data):
     <div style="overflow-x:auto;border-radius:10px;border:1px solid #334155">
     <table><thead><tr>
       <th>Departamento</th><th>Keiko</th><th>K%</th><th>Sánchez</th><th>S%</th>
-      <th>Diferencia</th><th>Actas pend.</th><th>% comp.</th>
+      <th>Diferencia</th><th>Actas pend.</th><th>Votos pend. (est.)</th><th>Avg v/acta</th><th>% comp.</th>
     </tr></thead><tbody>{rows}</tbody></table>
     </div>
   </div>
