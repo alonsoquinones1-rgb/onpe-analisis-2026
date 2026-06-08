@@ -81,21 +81,24 @@ def fetch_data():
         ext_proc  = ext_raw.get("contabilizadas", 0)
         ext_pct   = ext_raw.get("actasContabilizadas", 0)
 
-    # Extraer proporción real del extranjero si hay suficientes datos
+    # Extraer votos ya contados del extranjero (siempre, para el marcador real)
+    ext_keiko_votos = 0
+    ext_sanchez_votos = 0
     ext_keiko_real = None
-    if ext_pct >= EXT_THRESHOLD and ext_part_raw:
+    if ext_part_raw:
         cands = ext_part_raw if isinstance(ext_part_raw, list) else []
         ek = next((c for c in cands if "FUJIMORI" in c.get("nombreCandidato","").upper()), None)
         es = next((c for c in cands if "SÁNCHEZ" in c.get("nombreCandidato","").upper()
                    or "SANCHEZ" in c.get("nombreCandidato","").upper()), None)
-        ekv = ek.get("totalVotosValidos", 0) if ek else 0
-        esv = es.get("totalVotosValidos", 0) if es else 0
-        if ekv + esv > 0:
-            ext_keiko_real = ekv / (ekv + esv)  # proporción real
+        ext_keiko_votos   = ek.get("totalVotosValidos", 0) if ek else 0
+        ext_sanchez_votos = es.get("totalVotosValidos", 0) if es else 0
+        # Proporción real — solo se usa en proyecciones cuando llega al umbral
+        if ext_pct >= EXT_THRESHOLD and ext_keiko_votos + ext_sanchez_votos > 0:
+            ext_keiko_real = ext_keiko_votos / (ext_keiko_votos + ext_sanchez_votos)
 
-    # Modo: "real" si hay ≥50% extranjero, "supuesto" si no
+    # Modo: "real" si hay ≥50% extranjero contabilizado, "supuesto" si no
     usar_real = ext_keiko_real is not None
-    ext_keiko_pct = ext_keiko_real if usar_real else 0.60  # supuesto 60/40
+    ext_keiko_pct = ext_keiko_real if usar_real else 0.60  # supuesto 60/40 solo para pendientes
 
     departamentos = {}
     for ubigeo, nombre, part, tot in dept_res:
@@ -125,35 +128,42 @@ def fetch_data():
             "avg_votos_acta": avg_votos, "votos_pend_est": votos_pend_est,
         }
 
-    total_k = sum(d["keiko_votos"]   for d in departamentos.values())
-    total_s = sum(d["sanchez_votos"] for d in departamentos.values())
+    # Marcador real: doméstico + extranjero ya contado
+    dom_k   = sum(d["keiko_votos"]   for d in departamentos.values())
+    dom_s   = sum(d["sanchez_votos"] for d in departamentos.values())
+    total_k = dom_k + ext_keiko_votos
+    total_s = dom_s + ext_sanchez_votos
     lead    = total_k - total_s
-    total_ext_v = ext_total * 200
+
+    # Votos extranjero pendientes (los que aún no están en el marcador)
+    ext_votos_contados  = ext_keiko_votos + ext_sanchez_votos
+    avg_ext = round(ext_votos_contados / ext_proc) if ext_proc > 0 else 200
+    ext_pend_actas = ext_total - ext_proc
+    ext_votos_pend  = avg_ext * ext_pend_actas  # votos extranjero aún sin contar
+
     net_pend = sum(d["votos_pend_est"] * (d["keiko_pct"] - d["sanchez_pct"]) / 100
                    for d in departamentos.values())
     net_jee  = 935 * 219 * (63.5 - 36.5) / 100 + 69 * 213 * (65.6 - 34.4) / 100
 
-    # Proyecciones usando proporción real o supuesto según disponibilidad
-    remaining_ext_v = total_ext_v * (1 - ext_pct / 100)  # votos extranjero aún sin contar
+    # Proyecciones: sobre votos PENDIENTES del extranjero (ya contados están en lead)
     if usar_real:
-        # Con datos reales: proyectar solo los votos restantes con la proporción observada
-        net_ext_base = total_ext_v * (2 * ext_keiko_pct - 1)
+        net_ext_base = ext_votos_pend * (2 * ext_keiko_pct - 1)
         proj = {
             "keiko_real":  round(lead + net_pend + net_jee + net_ext_base),
-            "keiko_55pct": round(lead + net_pend + net_jee + total_ext_v * (2*0.55 - 1)),
-            "keiko_60pct": round(lead + net_pend + net_jee + total_ext_v * (2*0.60 - 1)),
-            "keiko_65pct": round(lead + net_pend + net_jee + total_ext_v * (2*0.65 - 1)),
+            "keiko_55pct": round(lead + net_pend + net_jee + ext_votos_pend * (2*0.55 - 1)),
+            "keiko_60pct": round(lead + net_pend + net_jee + ext_votos_pend * (2*0.60 - 1)),
+            "keiko_65pct": round(lead + net_pend + net_jee + ext_votos_pend * (2*0.65 - 1)),
         }
     else:
-        net_ext_base = total_ext_v * (2 * 0.60 - 1)
+        net_ext_base = ext_votos_pend * (2 * 0.60 - 1)
         proj = {
-            "keiko_55pct": round(lead + net_pend + net_jee + total_ext_v * (2*0.55 - 1)),
+            "keiko_55pct": round(lead + net_pend + net_jee + ext_votos_pend * (2*0.55 - 1)),
             "keiko_60pct": round(lead + net_pend + net_jee + net_ext_base),
-            "keiko_65pct": round(lead + net_pend + net_jee + total_ext_v * (2*0.65 - 1)),
+            "keiko_65pct": round(lead + net_pend + net_jee + ext_votos_pend * (2*0.65 - 1)),
         }
 
-    be    = 0.5 - (lead + net_pend + net_jee) / (2 * total_ext_v) if total_ext_v else 0.5
-    sigma = math.sqrt((0.05*total_ext_v)**2 + (0.05*914*175)**2 + (0.05*305*175)**2 + 15000**2)
+    be    = 0.5 - (lead + net_pend + net_jee) / (2 * ext_votos_pend) if ext_votos_pend else 0.5
+    sigma = math.sqrt((0.05*ext_votos_pend)**2 + (0.05*914*175)**2 + (0.05*305*175)**2 + 15000**2)
     base  = proj.get("keiko_real", proj["keiko_60pct"])
 
     return {
@@ -162,6 +172,9 @@ def fetch_data():
                      "actas_jee": nac_jee, "actas_pendientes": nac_pend, "actas_pct": round(nac_pct, 3)},
         "extranjero": {
             "total_actas": ext_total, "actas_proc": ext_proc, "actas_pct": round(ext_pct, 1),
+            "keiko_votos": ext_keiko_votos, "sanchez_votos": ext_sanchez_votos,
+            "votos_contados": ext_votos_contados, "actas_pendientes": ext_pend_actas,
+            "votos_pend_est": ext_votos_pend, "avg_votos_acta": avg_ext,
             "usar_real": usar_real,
             "keiko_pct_real": round(ext_keiko_real * 100, 2) if usar_real else None,
         },
@@ -171,7 +184,7 @@ def fetch_data():
             "keiko_pct": round(total_k/(total_k+total_s)*100, 3) if (total_k+total_s) else 0,
             "sanchez_pct": round(total_s/(total_k+total_s)*100, 3) if (total_k+total_s) else 0,
             "net_pendientes": round(net_pend), "net_jee": round(net_jee),
-            "ext_votos_est": total_ext_v, "proyecciones": proj,
+            "ext_votos_pend": ext_votos_pend, "proyecciones": proj,
             "breakeven_pct": round(be * 100, 1),
             "ic95_inf": round(base - 2*sigma),
             "ic95_sup": round(base + 2*sigma),
@@ -247,7 +260,32 @@ def generar_html(data):
                  f'<td class="nt">{d["avg_votos_acta"]}</td>'
                  f'<td>{d["pct_procesado"]}%</td></tr>\n')
 
-    dom_pend = nac["actas_pendientes"] - 1514 - 2543
+    dom_pend = nac["actas_pendientes"] - nac["actas_jee"] - ext["total_actas"]
+
+    # Fila de extranjero para la tabla
+    if ext["keiko_votos"] or ext["sanchez_votos"]:
+        ext_tv  = ext["keiko_votos"] + ext["sanchez_votos"]
+        ext_kpct = round(ext["keiko_votos"] / ext_tv * 100, 1) if ext_tv else 0
+        ext_spct = round(ext["sanchez_votos"] / ext_tv * 100, 1) if ext_tv else 0
+        ext_diff = ext["keiko_votos"] - ext["sanchez_votos"]
+        ext_diff_str = f"+{ext_diff:,}" if ext_diff > 0 else f"−{abs(ext_diff):,}"
+        ext_diff_cls = "kd" if ext_diff > 0 else "sd"
+        ext_row = (f'<tr style="background:#1e293b55;border-top:2px solid #334155">'
+                   f'<td class="dn" style="color:#94a3b8;font-style:italic">Extranjero ({ext_pct_val:.1f}%)</td>'
+                   f'<td>{ext["keiko_votos"]:,}</td><td class="kp">{ext_kpct}%</td>'
+                   f'<td>{ext["sanchez_votos"]:,}</td><td class="sp">{ext_spct}%</td>'
+                   f'<td class="{ext_diff_cls}">{ext_diff_str}</td>'
+                   f'<td class="ph">{ext["actas_pendientes"]:,}</td>'
+                   f'<td class="ph">{ext["votos_pend_est"]:,} (est.)</td>'
+                   f'<td class="nt">{ext["avg_votos_acta"]}</td>'
+                   f'<td>{ext_pct_val:.1f}%</td></tr>\n')
+    else:
+        ext_row = (f'<tr style="background:#1e293b55;border-top:2px solid #334155">'
+                   f'<td class="dn" style="color:#94a3b8;font-style:italic">Extranjero</td>'
+                   f'<td colspan="4" style="color:#64748b;text-align:center">Sin datos aún</td>'
+                   f'<td>—</td><td class="ph">{ext["actas_pendientes"]:,}</td>'
+                   f'<td class="ph">{ext["votos_pend_est"]:,} (est.)</td>'
+                   f'<td class="nt">200</td><td>0%</td></tr>\n')
 
     return f"""<!DOCTYPE html>
 <html lang="es">
@@ -330,9 +368,19 @@ def generar_html(data):
   <div class="section">
     <div class="stitle">Estado actual del conteo</div>
     <div class="scoreboard">
-      <div class="candidate"><div class="ck">Keiko Fujimori</div><div class="vk">{a["keiko_total"]:,}</div><div class="plabel">{a["keiko_pct"]}%</div></div>
+      <div class="candidate">
+        <div class="ck">Keiko Fujimori</div>
+        <div class="vk">{a["keiko_total"]:,}</div>
+        <div class="plabel">{a["keiko_pct"]}%</div>
+        {"" if not ext["keiko_votos"] else f'<div style="font-size:.75rem;color:#94a3b8;margin-top:.3rem">incl. {ext["keiko_votos"]:,} extran.</div>'}
+      </div>
       <div class="vsb"><div class="vst">VS</div><span class="lead-tag">{lead_winner} {lead_str}</span></div>
-      <div class="candidate"><div class="cs">Roberto Sánchez</div><div class="vsv">{a["sanchez_total"]:,}</div><div class="plabel">{a["sanchez_pct"]}%</div></div>
+      <div class="candidate">
+        <div class="cs">Roberto Sánchez</div>
+        <div class="vsv">{a["sanchez_total"]:,}</div>
+        <div class="plabel">{a["sanchez_pct"]}%</div>
+        {"" if not ext["sanchez_votos"] else f'<div style="font-size:.75rem;color:#94a3b8;margin-top:.3rem">incl. {ext["sanchez_votos"]:,} extran.</div>'}
+      </div>
     </div>
     <div class="prog">
       <div class="plrow"><span>Actas computadas</span><strong style="color:#e2e8f0">{nac["actas_pct"]:.3f}% — {nac["actas_contabilizadas"]:,} / {nac["total_actas"]:,}</strong></div>
@@ -347,7 +395,7 @@ def generar_html(data):
     </div>
     <div class="adanger">
       <strong>Resultado extremadamente ajustado:</strong> Solo <strong>{lead_str} votos</strong> ({abs(lead)/18_000_000*100:.3f}pp).
-      El extranjero (≈508,600 votos) decide. Break-even: Sánchez necesita ≥{100-be:.1f}% del voto exterior.
+      Quedan ≈<strong>{ext["votos_pend_est"]:,} votos del extranjero</strong> sin contar ({ext["actas_pendientes"]:,} actas). Break-even: Sánchez necesita ≥{100-be:.1f}% del voto exterior pendiente.
     </div>
     <div class="refresh-bar">
       <span>⏱ Se actualiza automáticamente cada 20 minutos · Último: {ts}</span>
@@ -361,7 +409,7 @@ def generar_html(data):
     <table><thead><tr>
       <th>Departamento</th><th>Keiko</th><th>K%</th><th>Sánchez</th><th>S%</th>
       <th>Diferencia</th><th>Actas pend.</th><th>Votos pend. (est.)</th><th>Avg v/acta</th><th>% comp.</th>
-    </tr></thead><tbody>{rows}</tbody></table>
+    </tr></thead><tbody>{rows}{ext_row}</tbody></table>
     </div>
   </div>
 
@@ -372,8 +420,10 @@ def generar_html(data):
         <div class="csub">Net: {fmt(a["net_pendientes"])} para Keiko<br>Cusco −29k · Ayacucho −21k · Loreto +16k</div></div>
       <div class="card cb"><div class="clabel">JEE impugnadas</div><div class="cval">{nac["actas_jee"]:,}</div>
         <div class="csub">Net: {fmt(a["net_jee"])} para Keiko<br>Lima 935 actas · Callao 69 actas</div></div>
-      <div class="card co"><div class="clabel">Extranjero {ext_badge}</div><div class="cval">{ext["total_actas"]:,}</div>
-        <div class="csub">≈{ext["total_actas"]*200:,} votos totales<br><strong style="color:#fbbf24">Break-even: {be}% Keiko / {100-be:.1f}% Sánchez</strong></div></div>
+      <div class="card co"><div class="clabel">Extranjero {ext_badge}</div><div class="cval">{ext["actas_pendientes"]:,} actas pend.</div>
+        <div class="csub">≈{ext["votos_pend_est"]:,} votos pendientes · {ext["avg_votos_acta"]} v/acta<br>
+        Ya contados: K {ext["keiko_votos"]:,} / S {ext["sanchez_votos"]:,}<br>
+        <strong style="color:#fbbf24">Break-even pend.: {be}% Keiko / {100-be:.1f}% Sánchez</strong></div></div>
       <div class="card cr"><div class="clabel">Ventaja actual</div><div class="cval">{lead_str}</div>
         <div class="csub">{abs(lead)/18_000_000*100:.3f}pp — Una de las más reñidas del siglo</div></div>
     </div>
