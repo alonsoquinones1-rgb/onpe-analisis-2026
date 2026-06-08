@@ -194,7 +194,7 @@ def fetch_data():
         }
     }
 
-def generar_html(data):
+def generar_html(data, history=None):
     a    = data["analysis"]
     nac  = data["nacional"]
     deps = data["departamentos"]
@@ -264,6 +264,9 @@ def generar_html(data):
                  f'<td>{d["pct_procesado"]}%</td></tr>\n')
 
     dom_pend = nac["actas_pendientes"] - nac["actas_jee"] - ext["total_actas"]
+
+    import json as _json
+    hist_json = _json.dumps(history or [])
 
     # Fila de extranjero para la tabla
     if ext["keiko_votos"] or ext["sanchez_votos"]:
@@ -353,6 +356,13 @@ def generar_html(data):
   .conclusion strong{{color:#f8fafc}}
   .note{{margin-top:.75rem;padding:.75rem;background:#1d4ed822;border-radius:8px;border-left:3px solid #3b82f6;color:#93c5fd;font-size:.82rem}}
   .ts{{color:#475569;font-size:.75rem;text-align:right;margin-top:2rem;padding-top:1rem;border-top:1px solid #1e293b}}
+  .tabs{{display:flex;gap:0;border-bottom:2px solid #334155;margin-bottom:0;padding:0 1.5rem;background:#0f1117}}
+  .tab-btn{{padding:.65rem 1.5rem;font-size:.85rem;font-weight:600;color:#64748b;background:none;border:none;border-bottom:2px solid transparent;margin-bottom:-2px;cursor:pointer;transition:all .2s}}
+  .tab-btn.active{{color:#e2e8f0;border-bottom-color:#3b82f6}}
+  .tab-btn:hover{{color:#cbd5e1}}
+  .tab-pane{{display:none}}.tab-pane.active{{display:block}}
+  .trend-card{{background:#1e293b;border-radius:10px;padding:1.25rem;border:1px solid #334155;margin-bottom:1.5rem}}
+  .trend-empty{{color:#475569;text-align:center;padding:3rem 0;font-size:.9rem}}
   @media(max-width:640px){{.scoreboard,.sg{{grid-template-columns:1fr}}.sc{{flex-direction:column;align-items:flex-start;gap:.4rem}}}}
 </style>
 </head>
@@ -366,7 +376,14 @@ def generar_html(data):
     <span class="badge br">{nac["actas_pct"]:.3f}% actas — Resultado muy ajustado</span>
   </div>
 </div>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="showTab('resumen')">Resumen</button>
+  <button class="tab-btn" onclick="showTab('tendencias')">Tendencias</button>
+</div>
+
 <div class="container">
+<div id="tab-resumen" class="tab-pane active">
 
   <div class="section">
     <div class="stitle">Estado actual del conteo</div>
@@ -484,6 +501,143 @@ def generar_html(data):
   </div>
 
   <div class="ts">Datos: resultadosegundavuelta.onpe.gob.pe · {ts} · Actualización automática cada 20 min</div>
-</div>
+
+</div><!-- /tab-resumen -->
+
+<div id="tab-tendencias" class="tab-pane">
+  <div class="section" style="margin-top:1.5rem">
+    <div class="stitle">Evolución del margen (votos)</div>
+    <div class="trend-card">
+      <canvas id="chart-lead" height="100"></canvas>
+      <div id="empty-lead" class="trend-empty" style="display:none">Sin suficientes datos aún — aparece tras la segunda actualización</div>
+    </div>
+    <div class="stitle">% Keiko vs % Sánchez</div>
+    <div class="trend-card">
+      <canvas id="chart-pcts" height="100"></canvas>
+      <div id="empty-pcts" class="trend-empty" style="display:none">Sin suficientes datos aún</div>
+    </div>
+    <div class="stitle">Avance del extranjero (%)</div>
+    <div class="trend-card">
+      <canvas id="chart-ext" height="80"></canvas>
+      <div id="empty-ext" class="trend-empty" style="display:none">Sin suficientes datos aún</div>
+    </div>
+    <div class="stitle">Tabla de snapshots</div>
+    <div style="overflow-x:auto;border-radius:10px;border:1px solid #334155">
+    <table id="snap-table">
+      <thead><tr>
+        <th style="text-align:left">Hora</th>
+        <th>% nac.</th><th>Lead Keiko</th><th>Keiko %</th><th>Sánchez %</th><th>Extran. %</th>
+      </tr></thead>
+      <tbody id="snap-tbody"></tbody>
+    </table>
+    </div>
+  </div>
+</div><!-- /tab-tendencias -->
+
+</div><!-- /container -->
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+const H = {hist_json};
+
+function showTab(t) {{
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + t).classList.add('active');
+  event.target.classList.add('active');
+  if (t === 'tendencias') buildCharts();
+}}
+
+let chartsBuilt = false;
+function buildCharts() {{
+  if (chartsBuilt) return;
+  chartsBuilt = true;
+
+  const labels = H.map(s => s.ts.slice(11));  // HH:MM
+  const leads  = H.map(s => s.lead);
+  const kpcts  = H.map(s => s.keiko_pct);
+  const spcts  = H.map(s => s.sanchez_pct);
+  const epcts  = H.map(s => s.ext_pct);
+
+  const gridColor = '#1e293b';
+  const tickColor = '#64748b';
+  const baseOpts = {{
+    responsive: true,
+    plugins: {{ legend: {{ labels: {{ color: '#94a3b8', boxWidth: 12 }} }} }},
+    scales: {{
+      x: {{ ticks: {{ color: tickColor, maxTicksLimit: 12 }}, grid: {{ color: gridColor }} }},
+      y: {{ ticks: {{ color: tickColor }}, grid: {{ color: gridColor }} }}
+    }}
+  }};
+
+  if (H.length < 2) {{
+    ['lead','pcts','ext'].forEach(id => {{
+      document.getElementById('chart-' + id).style.display = 'none';
+      document.getElementById('empty-' + id).style.display = 'block';
+    }});
+  }} else {{
+    new Chart(document.getElementById('chart-lead'), {{
+      type: 'line',
+      data: {{
+        labels,
+        datasets: [{{
+          label: 'Margen Keiko (votos)',
+          data: leads,
+          borderColor: leads[leads.length-1] > 0 ? '#f97316' : '#8b5cf6',
+          backgroundColor: leads[leads.length-1] > 0 ? '#f9731622' : '#8b5cf622',
+          fill: true, tension: 0.3, pointRadius: 4, pointHoverRadius: 6,
+        }}]
+      }},
+      options: {{...baseOpts, plugins: {{...baseOpts.plugins,
+        annotation: {{ annotations: {{ zero: {{ type: 'line', yMin: 0, yMax: 0, borderColor: '#475569', borderDash: [4,4] }} }} }}
+      }},
+      scales: {{...baseOpts.scales, y: {{...baseOpts.scales.y,
+        ticks: {{ color: tickColor, callback: v => v >= 0 ? '+' + v.toLocaleString() : v.toLocaleString() }}
+      }}}}
+      }}
+    }});
+
+    new Chart(document.getElementById('chart-pcts'), {{
+      type: 'line',
+      data: {{
+        labels,
+        datasets: [
+          {{ label: 'Keiko %', data: kpcts, borderColor: '#f97316', backgroundColor: '#f9731622', fill: false, tension: 0.3, pointRadius: 4 }},
+          {{ label: 'Sánchez %', data: spcts, borderColor: '#8b5cf6', backgroundColor: '#8b5cf622', fill: false, tension: 0.3, pointRadius: 4 }},
+        ]
+      }},
+      options: {{...baseOpts, scales: {{...baseOpts.scales,
+        y: {{ ...baseOpts.scales.y, ticks: {{ color: tickColor, callback: v => v + '%' }}, suggestedMin: 48, suggestedMax: 52 }}
+      }}}}
+    }});
+
+    new Chart(document.getElementById('chart-ext'), {{
+      type: 'bar',
+      data: {{
+        labels,
+        datasets: [{{ label: 'Extranjero contabilizado %', data: epcts, backgroundColor: '#22c55e44', borderColor: '#22c55e', borderWidth: 1 }}]
+      }},
+      options: {{...baseOpts, scales: {{...baseOpts.scales,
+        y: {{ ...baseOpts.scales.y, ticks: {{ color: tickColor, callback: v => v + '%' }}, max: 100 }}
+      }}}}
+    }});
+  }}
+
+  // Tabla
+  const tbody = document.getElementById('snap-tbody');
+  [...H].reverse().forEach(s => {{
+    const lead = s.lead >= 0 ? '+' + s.lead.toLocaleString() : s.lead.toLocaleString();
+    const lc   = s.lead >= 0 ? '#f97316' : '#8b5cf6';
+    tbody.innerHTML += `<tr>
+      <td style="text-align:left;color:#94a3b8">${{s.ts}}</td>
+      <td>${{s.pct.toFixed(3)}}%</td>
+      <td style="color:${{lc}};font-weight:600">${{lead}}</td>
+      <td style="color:#f97316">${{s.keiko_pct.toFixed(3)}}%</td>
+      <td style="color:#8b5cf6">${{s.sanchez_pct.toFixed(3)}}%</td>
+      <td style="color:#22c55e">${{s.ext_pct.toFixed(1)}}%</td>
+    </tr>`;
+  }});
+}}
+</script>
 </body>
 </html>"""
