@@ -1,6 +1,9 @@
 import os
 import json
+import datetime
 import logging
+
+LIMA = datetime.timezone(datetime.timedelta(hours=-5))
 from flask import Flask, Response
 from apscheduler.schedulers.background import BackgroundScheduler
 import scraper
@@ -39,7 +42,7 @@ def refresh():
         data = scraper.fetch_data()
         if data:
             snap = {
-                "ts":          data["timestamp"][:16].replace("T", " "),
+                "ts":          datetime.datetime.now(LIMA).strftime("%Y-%m-%d %H:%M"),
                 "pct":         data["nacional"]["actas_pct"],
                 "lead":        data["analysis"]["lead"],
                 "keiko_pct":   data["analysis"]["keiko_pct"],

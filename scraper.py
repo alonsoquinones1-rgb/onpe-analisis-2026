@@ -1,4 +1,6 @@
 import json, datetime, math, time
+
+LIMA = datetime.timezone(datetime.timedelta(hours=-5))
 import requests
 from concurrent.futures import ThreadPoolExecutor
 
@@ -170,7 +172,7 @@ def fetch_data():
     base  = proj.get("keiko_real", proj["keiko_60pct"])
 
     return {
-        "timestamp": datetime.datetime.now().isoformat(),
+        "timestamp": datetime.datetime.now(LIMA).isoformat(),
         "nacional": {"total_actas": nac_total, "actas_contabilizadas": nac_proc,
                      "actas_jee": nac_jee, "actas_pendientes": nac_pend, "actas_pct": round(nac_pct, 3)},
         "extranjero": {
