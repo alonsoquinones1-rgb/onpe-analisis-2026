@@ -555,11 +555,18 @@ function buildCharts() {{
 
   const gc = '#263044', tc = '#64748b';
 
-  // Eje X siempre 0–100% actas procesadas, con tooltip que muestra hora
+  // Eje X: auto-escala al rango real de los datos
+  // Con pocos puntos cercanos el rango se abre ~0.3pp para que la evolución sea legible
+  const pcts   = H.map(s => s.pct);
+  const rawMin = pcts.length ? Math.min(...pcts) : 0;
+  const rawMax = pcts.length ? Math.max(...pcts) : 100;
+  const span   = Math.max(rawMax - rawMin, 0.3);   // mínimo 0.3pp de ancho
+  const xMin   = Math.max(0,   rawMin - span * 0.5);
+  const xMax   = Math.min(100, rawMax + span * 0.5);
   const xScale = {{
-    type: 'linear', min: 0, max: 100,
+    type: 'linear', min: xMin, max: xMax,
     title: {{ display: true, text: '% actas nacionales procesadas', color: tc, font: {{ size: 11 }} }},
-    ticks: {{ color: tc, callback: v => v + '%' }},
+    ticks: {{ color: tc, callback: v => v.toFixed(2) + '%' }},
     grid: {{ color: gc }}
   }};
 
