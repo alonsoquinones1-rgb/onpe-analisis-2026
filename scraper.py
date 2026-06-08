@@ -297,7 +297,7 @@ def generar_html(data, history=None):
 <html lang="es">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="refresh" content="1200">
+<meta http-equiv="refresh" content="300">
 <title>Análisis Electoral Perú 2026 — Segunda Vuelta</title>
 <style>
   *{{box-sizing:border-box;margin:0;padding:0}}
@@ -418,7 +418,7 @@ def generar_html(data, history=None):
       Quedan ≈<strong>{ext["votos_pend_est"]:,} votos del extranjero</strong> sin contar ({ext["actas_pendientes"]:,} actas). Break-even: Sánchez necesita ≥{100-be:.1f}% del voto exterior pendiente.
     </div>
     <div class="refresh-bar">
-      <span>⏱ Se actualiza automáticamente cada 20 minutos · Último: {ts}</span>
+      <span>⏱ Se actualiza automáticamente cada 5 minutos · Último: {ts}</span>
       <a href="/refresh">↻ Actualizar ahora</a>
     </div>
   </div>

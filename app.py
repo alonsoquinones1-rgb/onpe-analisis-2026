@@ -10,7 +10,7 @@ log = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-HISTORY_FILE = "/tmp/onpe_history.json"
+HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history.json")
 _html_cache = {"content": "<p>Cargando datos...</p>", "ok": False}
 _history = []
 
@@ -78,7 +78,7 @@ if __name__ == "__main__":
     refresh()
 
     scheduler = BackgroundScheduler()
-    scheduler.add_job(refresh, "interval", minutes=20, id="onpe_refresh")
+    scheduler.add_job(refresh, "interval", minutes=5, id="onpe_refresh")
     scheduler.start()
 
     port = int(os.environ.get("PORT", 5000))
