@@ -55,13 +55,11 @@ def fetch_data():
 
     with ThreadPoolExecutor(max_workers=30) as pool:
         fut_nat      = pool.submit(_get, f"{BASE}/resumen-general/totales?idEleccion=10&tipoFiltro=eleccion")
-        fut_ext_tot  = pool.submit(_get, f"{BASE}/resumen-general/totales?idAmbitoGeografico=2&idEleccion=10")
-        fut_ext_part = pool.submit(_get, f"{BASE}/eleccion-presidencial/participantes-ubicacion-geografica-nombre"
-                                        f"?idEleccion=10&tipoFiltro=eleccion&idAmbitoGeografico=2")
+        fut_nat_part = pool.submit(_get, f"{BASE}/eleccion-presidencial/participantes-ubicacion-geografica-nombre"
+                                        f"?idEleccion=10&tipoFiltro=eleccion")
         dept_futs = [pool.submit(_fetch_dept, ub, nm) for ub, nm in DEPTS.items()]
         nat_raw      = fut_nat.result()
-        ext_raw      = fut_ext_tot.result()
-        ext_part_raw = fut_ext_part.result()
+        nat_part_raw = fut_nat_part.result()
         dept_res     = [f.result() for f in dept_futs]
 
     if not nat_raw:
@@ -73,32 +71,7 @@ def fetch_data():
     nac_pend  = nat_raw.get("pendientesJee", 0)
     nac_pct   = nat_raw.get("actasContabilizadas", 0)
 
-    ext_total = 2543
-    ext_proc  = 0
-    ext_pct   = 0.0
-    if ext_raw and ext_raw.get("totalActas", 0) > 0:
-        ext_total = ext_raw.get("totalActas", 2543)
-        ext_proc  = ext_raw.get("contabilizadas", 0)
-        ext_pct   = ext_raw.get("actasContabilizadas", 0)
-
-    # Extraer votos ya contados del extranjero (siempre, para el marcador real)
-    ext_keiko_votos = 0
-    ext_sanchez_votos = 0
-    ext_keiko_real = None
-    if ext_part_raw:
-        cands = ext_part_raw if isinstance(ext_part_raw, list) else []
-        ek = next((c for c in cands if "FUJIMORI" in c.get("nombreCandidato","").upper()), None)
-        es = next((c for c in cands if "SÁNCHEZ" in c.get("nombreCandidato","").upper()
-                   or "SANCHEZ" in c.get("nombreCandidato","").upper()), None)
-        ext_keiko_votos   = ek.get("totalVotosValidos", 0) if ek else 0
-        ext_sanchez_votos = es.get("totalVotosValidos", 0) if es else 0
-        # Proporción real — solo se usa en proyecciones cuando llega al umbral
-        if ext_pct >= EXT_THRESHOLD and ext_keiko_votos + ext_sanchez_votos > 0:
-            ext_keiko_real = ext_keiko_votos / (ext_keiko_votos + ext_sanchez_votos)
-
-    # Modo: "real" si hay ≥50% extranjero contabilizado, "supuesto" si no
-    usar_real = ext_keiko_real is not None
-    ext_keiko_pct = ext_keiko_real if usar_real else 0.60  # supuesto 60/40 solo para pendientes
+    ext_total = 2543  # fijo ONPE
 
     departamentos = {}
     for ubigeo, nombre, part, tot in dept_res:
@@ -128,9 +101,39 @@ def fetch_data():
             "avg_votos_acta": avg_votos, "votos_pend_est": votos_pend_est,
         }
 
+    # Votos domésticos
+    dom_k = sum(d["keiko_votos"]   for d in departamentos.values())
+    dom_s = sum(d["sanchez_votos"] for d in departamentos.values())
+
+    # Votos del extranjero: nacional − doméstico (la API directa del extran. devuelve 204)
+    ext_keiko_votos   = 0
+    ext_sanchez_votos = 0
+    if nat_part_raw:
+        cands = nat_part_raw if isinstance(nat_part_raw, list) else []
+        ek = next((c for c in cands if "FUJIMORI" in c.get("nombreCandidato","").upper()), None)
+        es = next((c for c in cands if "SÁNCHEZ" in c.get("nombreCandidato","").upper()
+                   or "SANCHEZ" in c.get("nombreCandidato","").upper()), None)
+        nat_k = ek.get("totalVotosValidos", 0) if ek else 0
+        nat_s = es.get("totalVotosValidos", 0) if es else 0
+        ext_keiko_votos   = max(0, nat_k - dom_k)
+        ext_sanchez_votos = max(0, nat_s - dom_s)
+
+    # Actas del extranjero procesadas: nacional − suma deptos (también el totales extran. devuelve 204)
+    dom_proc_sum = sum(d["actas_procesadas"] for d in departamentos.values())
+    ext_proc = max(0, nac_proc - dom_proc_sum)
+    ext_pct  = round(ext_proc / ext_total * 100, 2) if ext_total else 0.0
+
+    # Proporción real del extranjero para proyecciones (solo si ≥50%)
+    ext_keiko_real = None
+    ext_tv = ext_keiko_votos + ext_sanchez_votos
+    if ext_pct >= EXT_THRESHOLD and ext_tv > 0:
+        ext_keiko_real = ext_keiko_votos / ext_tv
+
+    # Modo: "real" si hay ≥50% extranjero contabilizado, "supuesto" si no
+    usar_real = ext_keiko_real is not None
+    ext_keiko_pct = ext_keiko_real if usar_real else 0.60  # supuesto 60/40 solo para pendientes
+
     # Marcador real: doméstico + extranjero ya contado
-    dom_k   = sum(d["keiko_votos"]   for d in departamentos.values())
-    dom_s   = sum(d["sanchez_votos"] for d in departamentos.values())
     total_k = dom_k + ext_keiko_votos
     total_s = dom_s + ext_sanchez_votos
     lead    = total_k - total_s
