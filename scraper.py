@@ -582,6 +582,35 @@ def generar_html(data, history=None):
       </div>
     </div>
 
+    <!-- Por qué el modelo dice X% -->
+    <div style="margin-bottom:1rem">
+      <div style="font-size:.8rem;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:.75rem 0 .5rem">Por qué el modelo dice {pk}% para Keiko</div>
+      <div style="display:flex;flex-direction:column;gap:.6rem">
+        <div style="background:#1e293b;border-radius:10px;padding:1rem 1.25rem;border-left:4px solid {razon1_color}">
+          <div style="font-size:.78rem;font-weight:700;color:#e2e8f0;margin-bottom:.35rem">Razón principal — Señal del extranjero ({confianza_ext})</div>
+          <div style="font-size:.83rem;color:#94a3b8;line-height:1.6">{razon_ext_texto}</div>
+          <div style="margin-top:.5rem;display:flex;gap:1.5rem;font-size:.78rem;flex-wrap:wrap">
+            <span style="color:#64748b">Z-score: <strong style="color:#e2e8f0">{z}</strong></span>
+            <span style="color:#64748b">σ: <strong style="color:#e2e8f0">±{sig_ext}pp</strong></span>
+            <span style="color:#64748b">Reversión necesaria: <strong style="color:#fbbf24">{gap_pp:+.1f}pp</strong></span>
+          </div>
+        </div>
+        <div style="background:#1e293b;border-radius:10px;padding:1rem 1.25rem;border-left:4px solid #f97316">
+          <div style="font-size:.78rem;font-weight:700;color:#e2e8f0;margin-bottom:.35rem">Factor 2 — JEE favorece a Keiko ({fmt(a["net_jee"])} netos)</div>
+          <div style="font-size:.83rem;color:#94a3b8;line-height:1.6">
+            De las {nac["actas_jee"]:,} actas en el JEE, el <strong>{jee_k_pct}%</strong> de sus votos estimados va a Keiko vs <strong>{jee_s_pct}%</strong> a Sánchez.
+            Lima ({[j for j in a["jee_breakdown"] if "Lima" in j["nombre"]][0]["actas"] if any("Lima" in j["nombre"] for j in a["jee_breakdown"]) else 0} actas, {[j for j in a["jee_breakdown"] if "Lima" in j["nombre"]][0]["keiko_pct"] if any("Lima" in j["nombre"] for j in a["jee_breakdown"]) else 0}% Keiko) y Callao dominan este bloque.
+          </div>
+        </div>
+        <div style="background:#1e293b;border-radius:10px;padding:1rem 1.25rem;border-left:4px solid {"#ef4444" if a["net_pendientes"] < 0 else "#22c55e"}">
+          <div style="font-size:.78rem;font-weight:700;color:#e2e8f0;margin-bottom:.35rem">Factor 3 — Doméstico pendiente ({fmt(a["net_pendientes"])} a {"Keiko" if a["net_pendientes"]>0 else "Sánchez"})</div>
+          <div style="font-size:.83rem;color:#94a3b8;line-height:1.6">
+            Quedan ~{max(dom_pend,0):,} actas domésticas. Neto estimado: <strong>{fmt(a["net_pendientes"])}</strong> para {"Keiko" if a["net_pendientes"]>0 else "Sánchez"}. Bloque pequeño comparado con exterior y JEE.
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Semáforo por bloque -->
     <div style="font-size:.8rem;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:.75rem 0 .5rem">Semáforo por bloque de votos</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:.75rem;margin-bottom:1rem">
@@ -624,48 +653,6 @@ def generar_html(data, history=None):
       [<strong style="color:{("#f97316" if ic_inf>0 else "#8b5cf6")}">{fmt(ic_inf)}</strong>
       ,&nbsp;<strong style="color:{("#f97316" if ic_sup>0 else "#8b5cf6")}">{fmt(ic_sup)}</strong>]
       · Basado en señal del extranjero ({mu_ext}% Keiko, ±{sig_ext}pp incertidumbre)
-    </div>
-  </div>
-
-  <div class="section">
-    <div class="stitle">Por qué el modelo dice {pk}% para Keiko</div>
-    <div style="display:flex;flex-direction:column;gap:.75rem">
-
-      <div style="background:#1e293b;border-radius:10px;padding:1.1rem 1.25rem;border-left:4px solid {razon1_color}">
-        <div style="font-size:.8rem;font-weight:700;color:#e2e8f0;margin-bottom:.4rem">
-          Razón principal — Señal del extranjero ({confianza_ext})
-        </div>
-        <div style="font-size:.85rem;color:#94a3b8;line-height:1.6">{razon_ext_texto}</div>
-        <div style="margin-top:.6rem;display:flex;gap:1.5rem;font-size:.8rem">
-          <span style="color:#64748b">Z-score: <strong style="color:#e2e8f0">{z}</strong></span>
-          <span style="color:#64748b">σ extranjero: <strong style="color:#e2e8f0">±{sig_ext}pp</strong></span>
-          <span style="color:#64748b">Reversión necesaria: <strong style="color:#fbbf24">{gap_pp:+.1f}pp en lo que queda</strong></span>
-        </div>
-      </div>
-
-      <div style="background:#1e293b;border-radius:10px;padding:1.1rem 1.25rem;border-left:4px solid #f97316">
-        <div style="font-size:.8rem;font-weight:700;color:#e2e8f0;margin-bottom:.4rem">
-          Factor 2 — JEE favorece a Keiko (+{fmt(a["net_jee"])} netos)
-        </div>
-        <div style="font-size:.85rem;color:#94a3b8;line-height:1.6">
-          De las {nac["actas_jee"]:,} actas en el JEE, el <strong>{jee_k_pct}%</strong> de sus votos estimados va a Keiko
-          vs <strong>{jee_s_pct}%</strong> a Sánchez. Lima ({[j for j in a["jee_breakdown"] if "Lima" in j["nombre"]][0]["actas"] if any("Lima" in j["nombre"] for j in a["jee_breakdown"]) else 0} actas,
-          {[j for j in a["jee_breakdown"] if "Lima" in j["nombre"]][0]["keiko_pct"] if any("Lima" in j["nombre"] for j in a["jee_breakdown"]) else 0}% Keiko) y Callao dominan este bloque.
-          El JEE cubre parte del déficit doméstico actual de {lead_str}.
-        </div>
-      </div>
-
-      <div style="background:#1e293b;border-radius:10px;padding:1.1rem 1.25rem;border-left:4px solid {"#ef4444" if a["net_pendientes"] < 0 else "#22c55e"}">
-        <div style="font-size:.8rem;font-weight:700;color:#e2e8f0;margin-bottom:.4rem">
-          Factor 3 — Doméstico pendiente ({fmt(a["net_pendientes"])} netos a {"Keiko" if a["net_pendientes"]>0 else "Sánchez"})
-        </div>
-        <div style="font-size:.85rem;color:#94a3b8;line-height:1.6">
-          Quedan ~{max(dom_pend,0):,} actas domésticas. Con las proporciones actuales de cada departamento,
-          se estima un neto de <strong>{fmt(a["net_pendientes"])}</strong> para {"Keiko" if a["net_pendientes"]>0 else "Sánchez"}.
-          Este bloque es pequeño comparado con el exterior y el JEE.
-        </div>
-      </div>
-
     </div>
   </div>
 
