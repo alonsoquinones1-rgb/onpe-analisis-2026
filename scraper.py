@@ -148,7 +148,19 @@ def fetch_data():
 
     net_pend = sum(d["votos_pend_est"] * (d["keiko_pct"] - d["sanchez_pct"]) / 100
                    for d in departamentos.values())
-    net_jee  = 935 * 219 * (63.5 - 36.5) / 100 + 69 * 213 * (65.6 - 34.4) / 100
+    # JEE: usar datos reales por departamento (avg_votos_acta y proporciones actuales)
+    net_jee = sum(
+        d["actas_jee"] * d["avg_votos_acta"] * (d["keiko_pct"] - d["sanchez_pct"]) / 100
+        for d in departamentos.values()
+    )
+    jee_breakdown = sorted(
+        [{"nombre": d["nombre"], "actas": d["actas_jee"],
+          "votos_est": d["actas_jee"] * d["avg_votos_acta"],
+          "keiko_pct": d["keiko_pct"], "sanchez_pct": d["sanchez_pct"],
+          "net_keiko": round(d["actas_jee"] * d["avg_votos_acta"] * (d["keiko_pct"] - d["sanchez_pct"]) / 100)}
+         for d in departamentos.values() if d["actas_jee"] > 0],
+        key=lambda x: -abs(x["net_keiko"])
+    )
 
     # Proyecciones: sobre votos PENDIENTES del extranjero (ya contados están en lead)
     if usar_real:
@@ -214,6 +226,7 @@ def fetch_data():
             "keiko_pct": round(total_k/(total_k+total_s)*100, 3) if (total_k+total_s) else 0,
             "sanchez_pct": round(total_s/(total_k+total_s)*100, 3) if (total_k+total_s) else 0,
             "net_pendientes": round(net_pend), "net_jee": round(net_jee),
+            "jee_breakdown": jee_breakdown,
             "ext_votos_pend": ext_votos_pend, "proyecciones": proj,
             "breakeven_pct": round(be * 100, 1),
             "ic95_inf": round(base - 2*sigma),
@@ -298,6 +311,40 @@ def generar_html(data, history=None):
         )
     else:
         real_scenario_html = ""
+
+    # ── Por qué el modelo dice X% ─────────────────────────────────────────
+    z      = a["z_keiko"]
+    gap_pp = a["ext_margen_be"]
+    reversal = round(abs(gap_pp) * (100 - ext_pct_val) / 100, 1)   # pp reversión necesaria en lo que queda
+    confianza_ext = "fuerte" if ext_pct_val >= 25 else ("moderada" if ext_pct_val >= 10 else "preliminar")
+    razon1_color = "#f97316" if gap_pp > 5 else ("#fbbf24" if gap_pp > 0 else "#8b5cf6")
+    razon_ext_texto = (
+        f"Con {ext_pct_val:.1f}% del exterior contado, Keiko lleva <strong>{mu_ext}%</strong>. "
+        f"Solo necesita <strong>{be}%</strong> para ganar — un margen de <strong>{gap_pp:+.1f}pp</strong>. "
+        f"Para revertir este resultado, los votos restantes del exterior tendrían que ir "
+        f"<strong>≥{min(99, round(mu_ext + reversal, 1))}% para Sánchez</strong>."
+    )
+    jee_net_k = [j for j in a["jee_breakdown"] if j["net_keiko"] > 0]
+    jee_net_s = [j for j in a["jee_breakdown"] if j["net_keiko"] < 0]
+    jee_votos_k = sum(j["votos_est"] * j["keiko_pct"] / 100 for j in a["jee_breakdown"])
+    jee_votos_s = sum(j["votos_est"] * j["sanchez_pct"] / 100 for j in a["jee_breakdown"])
+    jee_total_v = sum(j["votos_est"] for j in a["jee_breakdown"])
+    jee_k_pct   = round(jee_votos_k / jee_total_v * 100, 1) if jee_total_v else 0
+    jee_s_pct   = round(jee_votos_s / jee_total_v * 100, 1) if jee_total_v else 0
+
+    # Filas de la tabla JEE
+    jee_rows = ""
+    for j in a["jee_breakdown"]:
+        nc  = "#f97316" if j["net_keiko"] > 0 else "#8b5cf6"
+        kc  = "#f97316" if j["keiko_pct"] > j["sanchez_pct"] else "#8b5cf6"
+        jee_rows += (
+            f'<tr><td class="dn">{j["nombre"]}</td>'
+            f'<td>{j["actas"]}</td>'
+            f'<td>{j["votos_est"]:,}</td>'
+            f'<td style="color:{kc}">{j["keiko_pct"]}%</td>'
+            f'<td style="color:#8b5cf6">{j["sanchez_pct"]}%</td>'
+            f'<td style="color:{nc};font-weight:600">{fmt(j["net_keiko"])}</td></tr>\n'
+        )
 
     rows = ""
     for ub, d in sorted(deps.items(), key=lambda x: -x[1]["keiko_votos"]):
@@ -577,6 +624,67 @@ def generar_html(data, history=None):
       [<strong style="color:{("#f97316" if ic_inf>0 else "#8b5cf6")}">{fmt(ic_inf)}</strong>
       ,&nbsp;<strong style="color:{("#f97316" if ic_sup>0 else "#8b5cf6")}">{fmt(ic_sup)}</strong>]
       · Basado en señal del extranjero ({mu_ext}% Keiko, ±{sig_ext}pp incertidumbre)
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="stitle">Por qué el modelo dice {pk}% para Keiko</div>
+    <div style="display:flex;flex-direction:column;gap:.75rem">
+
+      <div style="background:#1e293b;border-radius:10px;padding:1.1rem 1.25rem;border-left:4px solid {razon1_color}">
+        <div style="font-size:.8rem;font-weight:700;color:#e2e8f0;margin-bottom:.4rem">
+          Razón principal — Señal del extranjero ({confianza_ext})
+        </div>
+        <div style="font-size:.85rem;color:#94a3b8;line-height:1.6">{razon_ext_texto}</div>
+        <div style="margin-top:.6rem;display:flex;gap:1.5rem;font-size:.8rem">
+          <span style="color:#64748b">Z-score: <strong style="color:#e2e8f0">{z}</strong></span>
+          <span style="color:#64748b">σ extranjero: <strong style="color:#e2e8f0">±{sig_ext}pp</strong></span>
+          <span style="color:#64748b">Reversión necesaria: <strong style="color:#fbbf24">{gap_pp:+.1f}pp en lo que queda</strong></span>
+        </div>
+      </div>
+
+      <div style="background:#1e293b;border-radius:10px;padding:1.1rem 1.25rem;border-left:4px solid #f97316">
+        <div style="font-size:.8rem;font-weight:700;color:#e2e8f0;margin-bottom:.4rem">
+          Factor 2 — JEE favorece a Keiko (+{fmt(a["net_jee"])} netos)
+        </div>
+        <div style="font-size:.85rem;color:#94a3b8;line-height:1.6">
+          De las {nac["actas_jee"]:,} actas en el JEE, el <strong>{jee_k_pct}%</strong> de sus votos estimados va a Keiko
+          vs <strong>{jee_s_pct}%</strong> a Sánchez. Lima ({[j for j in a["jee_breakdown"] if "Lima" in j["nombre"]][0]["actas"] if any("Lima" in j["nombre"] for j in a["jee_breakdown"]) else 0} actas,
+          {[j for j in a["jee_breakdown"] if "Lima" in j["nombre"]][0]["keiko_pct"] if any("Lima" in j["nombre"] for j in a["jee_breakdown"]) else 0}% Keiko) y Callao dominan este bloque.
+          El JEE cubre parte del déficit doméstico actual de {lead_str}.
+        </div>
+      </div>
+
+      <div style="background:#1e293b;border-radius:10px;padding:1.1rem 1.25rem;border-left:4px solid {"#ef4444" if a["net_pendientes"] < 0 else "#22c55e"}">
+        <div style="font-size:.8rem;font-weight:700;color:#e2e8f0;margin-bottom:.4rem">
+          Factor 3 — Doméstico pendiente ({fmt(a["net_pendientes"])} netos a {"Keiko" if a["net_pendientes"]>0 else "Sánchez"})
+        </div>
+        <div style="font-size:.85rem;color:#94a3b8;line-height:1.6">
+          Quedan ~{max(dom_pend,0):,} actas domésticas. Con las proporciones actuales de cada departamento,
+          se estima un neto de <strong>{fmt(a["net_pendientes"])}</strong> para {"Keiko" if a["net_pendientes"]>0 else "Sánchez"}.
+          Este bloque es pequeño comparado con el exterior y el JEE.
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="stitle">Análisis JEE — {nac["actas_jee"]:,} actas impugnadas ({jee_k_pct}% votos est. Keiko / {jee_s_pct}% Sánchez)</div>
+    <div style="margin-bottom:.75rem;padding:.75rem 1rem;background:#1e293b;border-radius:8px;font-size:.85rem;color:#94a3b8;border:1px solid #334155">
+      Total estimado: <strong style="color:#e2e8f0">~{jee_total_v:,} votos</strong> en actas JEE ·
+      Keiko: <strong style="color:#f97316">~{round(jee_votos_k):,}</strong> ·
+      Sánchez: <strong style="color:#8b5cf6">~{round(jee_votos_s):,}</strong> ·
+      Neto: <strong style="color:#f97316">{fmt(a["net_jee"])}</strong> para Keiko
+    </div>
+    <div style="overflow-x:auto;border-radius:10px;border:1px solid #334155">
+    <table>
+      <thead><tr>
+        <th style="text-align:left">Departamento</th>
+        <th>Actas JEE</th><th>Votos est.</th><th>Keiko %</th><th>Sánchez %</th><th>Neto Keiko</th>
+      </tr></thead>
+      <tbody>{jee_rows}</tbody>
+    </table>
     </div>
   </div>
 
