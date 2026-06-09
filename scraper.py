@@ -171,6 +171,31 @@ def fetch_data():
     sigma = math.sqrt((0.05*ext_votos_pend)**2 + (0.05*914*175)**2 + (0.05*305*175)**2 + 15000**2)
     base  = proj.get("keiko_real", proj["keiko_60pct"])
 
+    # ── Modelo probabilístico ───────────────────────────────────────────────
+    # Señal del extranjero: proporción observada si hay datos, prior 60% si no
+    ext_tv = ext_keiko_votos + ext_sanchez_votos
+    if ext_tv > 0:
+        mu_ext    = ext_keiko_votos / ext_tv
+        # Incertidumbre decrece a medida que se cuenta más extranjero
+        sigma_ext = max(0.03, 0.09 * math.sqrt(max(0, 1 - ext_pct / 100)))
+    else:
+        mu_ext    = 0.60   # prior histórico (Keiko 2021: ~63%)
+        sigma_ext = 0.09   # alta incertidumbre
+
+    # P(Keiko gana) = P(extran_k ≥ break_even)
+    # Z = (mu_ext - be) / sigma_ext
+    z_keiko    = (mu_ext - be) / sigma_ext if sigma_ext else 0
+    prob_keiko = (1 + math.erf(z_keiko / math.sqrt(2))) / 2  # Φ(z)
+
+    # Proyección central con señal actual
+    proj_central = round(lead + net_pend + net_jee + ext_votos_pend * (2 * mu_ext - 1))
+
+    # Semáforo por bloque
+    dom_status  = "k" if net_pend > 0 else "s"    # quién gana doméstico pendiente
+    jee_status  = "k" if net_jee  > 0 else "s"    # siempre Keiko (Lima/Callao)
+    ext_margen  = mu_ext - be                       # margen sobre break-even
+    ext_status  = "k" if ext_margen > 0.03 else ("s" if ext_margen < -0.03 else "n")
+
     return {
         "timestamp": datetime.datetime.now(LIMA).isoformat(),
         "nacional": {"total_actas": nac_total, "actas_contabilizadas": nac_proc,
@@ -193,6 +218,16 @@ def fetch_data():
             "breakeven_pct": round(be * 100, 1),
             "ic95_inf": round(base - 2*sigma),
             "ic95_sup": round(base + 2*sigma),
+            "prob_keiko":    round(prob_keiko * 100, 1),
+            "prob_sanchez":  round((1 - prob_keiko) * 100, 1),
+            "proj_central":  proj_central,
+            "mu_ext":        round(mu_ext * 100, 1),
+            "sigma_ext":     round(sigma_ext * 100, 1),
+            "z_keiko":       round(z_keiko, 2),
+            "dom_status":    dom_status,
+            "jee_status":    jee_status,
+            "ext_status":    ext_status,
+            "ext_margen_be": round(ext_margen * 100, 1),
         }
     }
 
@@ -219,6 +254,24 @@ def generar_html(data, history=None):
     be     = a["breakeven_pct"]
     ic_inf = a["ic95_inf"]
     ic_sup = a["ic95_sup"]
+
+    pk     = a["prob_keiko"]
+    ps     = a["prob_sanchez"]
+    mu_ext = a["mu_ext"]
+    sig_ext= a["sigma_ext"]
+    proj_c = a["proj_central"]
+    ext_mb = a["ext_margen_be"]   # margen sobre break-even en pp
+
+    # colores por status de bloque
+    _sc = {"k": "#f97316", "s": "#8b5cf6", "n": "#fbbf24"}
+    dom_c = _sc[a["dom_status"]]; jee_c = _sc[a["jee_status"]]; ext_c = _sc[a["ext_status"]]
+    dom_lbl = ("Keiko" if a["dom_status"]=="k" else "Sánchez" if a["dom_status"]=="s" else "Empate")
+    ext_lbl = ("Keiko" if a["ext_status"]=="k" else "Sánchez" if a["ext_status"]=="s" else "Zona de empate")
+
+    # Ganador proyectado
+    winner_proj = "KEIKO FUJIMORI" if proj_c > 0 else "ROBERTO SÁNCHEZ"
+    winner_c    = "#f97316" if proj_c > 0 else "#8b5cf6"
+    winner_prob = pk if proj_c > 0 else ps
 
     if usar_real:
         ext_badge = (f'<span style="background:#16a34a;color:#fff;padding:.15rem .5rem;border-radius:99px;font-size:.75rem;font-weight:600">'
@@ -452,57 +505,93 @@ def generar_html(data, history=None):
   </div>
 
   <div class="section">
-    <div class="stitle">Escenarios de proyección</div>
+    <div class="stitle">Análisis de probabilidad</div>
+
+    <!-- Ganador proyectado -->
+    <div style="background:linear-gradient(135deg,#1e293b,#0f172a);border-radius:12px;padding:1.5rem;border:2px solid {winner_c}44;margin-bottom:1rem">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:1rem">
+        <div>
+          <div style="font-size:.75rem;color:#64748b;text-transform:uppercase;letter-spacing:.05em">Proyección con señal actual</div>
+          <div style="font-size:1.4rem;font-weight:800;color:{winner_c};margin-top:.3rem">{winner_proj}</div>
+          <div style="font-size:.9rem;color:#94a3b8;margin-top:.2rem">Resultado proyectado: <strong style="color:{winner_c}">{fmt(proj_c)}</strong> votos</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:.75rem;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.4rem">Probabilidad de ganar</div>
+          <div style="font-size:2.5rem;font-weight:900;color:{winner_c};line-height:1">{winner_prob}%</div>
+          <div style="font-size:.75rem;color:#475569;margin-top:.2rem">modelo probabilístico</div>
+        </div>
+      </div>
+      <!-- Barra de probabilidad -->
+      <div style="margin-top:1rem">
+        <div style="display:flex;justify-content:space-between;font-size:.75rem;color:#64748b;margin-bottom:.3rem">
+          <span>Keiko {pk}%</span><span>Sánchez {ps}%</span>
+        </div>
+        <div style="background:#0f1117;border-radius:99px;height:12px;overflow:hidden">
+          <div style="width:{pk}%;background:linear-gradient(90deg,#f97316,#fb923c);height:100%;border-radius:99px;transition:width .5s"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:.7rem;color:#334155;margin-top:.2rem">
+          <span>←  Sánchez</span><span>Keiko  →</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Semáforo por bloque -->
+    <div style="font-size:.8rem;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:.75rem 0 .5rem">Semáforo por bloque de votos</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:.75rem;margin-bottom:1rem">
+      <div style="background:#1e293b;border-radius:10px;padding:1rem;border-left:4px solid {dom_c}">
+        <div style="font-size:.72rem;color:#64748b;text-transform:uppercase">Doméstico pendiente</div>
+        <div style="font-size:1.1rem;font-weight:700;color:{dom_c};margin:.3rem 0">{fmt(a["net_pendientes"])} → {dom_lbl}</div>
+        <div style="font-size:.78rem;color:#64748b">~{max(dom_pend,0):,} actas · impacto neto estimado</div>
+      </div>
+      <div style="background:#1e293b;border-radius:10px;padding:1rem;border-left:4px solid {jee_c}">
+        <div style="font-size:.72rem;color:#64748b;text-transform:uppercase">JEE (Lima + Callao)</div>
+        <div style="font-size:1.1rem;font-weight:700;color:{jee_c};margin:.3rem 0">{fmt(a["net_jee"])} → Keiko</div>
+        <div style="font-size:.78rem;color:#64748b">{nac["actas_jee"]:,} actas · Lima 935 + Callao 69</div>
+      </div>
+      <div style="background:#1e293b;border-radius:10px;padding:1rem;border-left:4px solid {ext_c}">
+        <div style="font-size:.72rem;color:#64748b;text-transform:uppercase">Extranjero ({ext_pct_val:.1f}% contado)</div>
+        <div style="font-size:1.1rem;font-weight:700;color:{ext_c};margin:.3rem 0">{mu_ext}% Keiko → {ext_lbl}</div>
+        <div style="font-size:.78rem;color:#64748b">{ext_mb:+.1f}pp sobre break-even ({be}%)</div>
+      </div>
+    </div>
+
+    <!-- Escenarios medibles -->
+    <div style="font-size:.8rem;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:.75rem 0 .5rem">Escenarios — qué monitorear</div>
     <div class="scenarios">
       {real_scenario_html}
-      <div class="sc sc-k"><div><div class="scname">Optimista Keiko (65% extran.)</div></div>
+      <div class="sc sc-k"><div><div class="scname">Si extran. mantiene tendencia actual ({mu_ext}% Keiko)</div><div class="scsub">Basado en {ext_pct_val:.1f}% ya contado · σ={sig_ext}%</div></div>
+        <div style="text-align:right"><div class="scm" style="color:{winner_c}">{fmt(proj_c)}</div><div class="scw">{win(proj_c)}</div></div></div>
+      <div class="sc sc-k"><div><div class="scname">Escenario 65% Keiko extran.</div></div>
         <div style="text-align:right"><div class="scm" style="color:#f97316">{fmt(p65)}</div><div class="scw">{win(p65)}</div></div></div>
-      <div class="sc sc-k"><div><div class="scname">Base — 60/40 extranjero</div><div class="scsub">Supuesto del análisis</div></div>
-        <div style="text-align:right"><div class="scm" style="color:#f97316">{fmt(p60)}</div><div class="scw">{win(p60)}</div></div></div>
-      <div class="sc sc-k"><div><div class="scname">Conservador Keiko (55% extran.)</div></div>
+      <div class="sc sc-k"><div><div class="scname">Escenario 55% Keiko extran.</div></div>
         <div style="text-align:right"><div class="scm" style="color:#f97316">{fmt(p55)}</div><div class="scw">{win(p55)}</div></div></div>
-      <div class="sc sc-n"><div><div class="scname">Break-even</div><div class="scsub">Punto exacto de empate</div></div>
-        <div style="text-align:right"><div class="scm" style="color:#fbbf24">{be}% Keiko / {100-be:.1f}% Sánchez</div></div></div>
-      <div class="sc sc-s"><div><div class="scname">Sánchez gana</div><div class="scsub">Con ≥{100-be:.1f}% del extran. (sin otras condiciones)</div></div>
-        <div style="text-align:right"><div class="scm" style="color:#8b5cf6">Probabilidad ≈ 25–35%</div></div></div>
+      <div class="sc sc-n"><div><div class="scname">Break-even del extranjero</div><div class="scsub">Punto exacto donde cambia el ganador</div></div>
+        <div style="text-align:right"><div class="scm" style="color:#fbbf24">{be}% Keiko — {100-be:.1f}% Sánchez</div></div></div>
+      <div class="sc sc-s"><div><div class="scname">Para que Sánchez gane el extranjero necesita…</div><div class="scsub">Actualmente va en {100-mu_ext:.1f}% — necesita {100-be:.1f}%</div></div>
+        <div style="text-align:right"><div class="scm" style="color:#8b5cf6">≥{100-be:.1f}% del exterior</div><div class="scw">{"⚠ Posible" if (100-mu_ext) >= (100-be)-5 else "Necesitaría revertir tendencia actual"}</div></div></div>
     </div>
-  </div>
 
-  <div class="section">
-    <div class="stitle">Intervalo de confianza al 95%</div>
-    <div style="background:#1e293b;border-radius:10px;padding:1.5rem;border:1px solid #334155">
-      <div style="display:flex;justify-content:space-between;font-size:1.1rem;font-weight:700;margin-bottom:1rem">
-        <span style="color:#f97316">Keiko {fmt(ic_inf)}</span>
-        <span style="color:#f97316">Keiko {fmt(ic_sup)}</span>
-      </div>
-      <div style="background:#0f1117;border-radius:99px;height:14px;overflow:hidden;position:relative">
-        <div style="position:absolute;left:0;top:0;bottom:0;width:50%;background:#8b5cf6;border-radius:99px 0 0 99px"></div>
-        <div style="position:absolute;left:50.5%;top:0;bottom:0;right:0;background:#f9731666;border-radius:0 99px 99px 0"></div>
-        <div style="position:absolute;left:47%;top:0;bottom:0;width:6%;background:#f97316;border-radius:4px"></div>
-      </div>
-      <div style="display:flex;justify-content:center;gap:3rem;margin-top:.75rem;font-size:.8rem;color:#64748b">
-        <span>← Sánchez gana</span><span style="color:#94a3b8;font-weight:600">0</span><span>Keiko gana →</span>
-      </div>
-      <div style="margin-top:1rem;padding:.75rem;background:#0f1117;border-radius:8px;font-size:.85rem;color:#94a3b8">
-        IC 95%: [<strong style="color:#e2e8f0">{fmt(ic_inf)}</strong> , <strong style="color:#e2e8f0">{fmt(ic_sup)}</strong>]
-        — Todo en territorio positivo para Keiko (bajo supuesto 60/40).<br>
-        Sánchez gana si extran. supera <strong style="color:#fbbf24">{100-be:.1f}%</strong>.
-      </div>
+    <!-- Rango IC 95% -->
+    <div style="margin-top:1rem;padding:1rem 1.25rem;background:#1e293b;border-radius:10px;border:1px solid #334155;font-size:.85rem;color:#94a3b8">
+      <strong style="color:#e2e8f0">Rango IC 95%:</strong>
+      [<strong style="color:{("#f97316" if ic_inf>0 else "#8b5cf6")}">{fmt(ic_inf)}</strong>
+      ,&nbsp;<strong style="color:{("#f97316" if ic_sup>0 else "#8b5cf6")}">{fmt(ic_sup)}</strong>]
+      · Basado en señal del extranjero ({mu_ext}% Keiko, ±{sig_ext}pp incertidumbre)
     </div>
   </div>
 
   <div class="section">
     <div class="stitle">Conclusión</div>
     <div class="conclusion">
-      <h3>Veredicto — {nac["actas_pct"]:.3f}% actas · Carrera al filo</h3>
-      <p>Con solo <strong>{lead_str} votos</strong> ({abs(lead)/18_000_000*100:.3f}pp), la elección la decide el <strong>voto extranjero</strong> (≈{ext["total_actas"]*200:,} sin contar).</p>
-      <p>{"Proyección con datos reales: <strong>Keiko " + fmt(p_real) + "</strong>. " if usar_real else "Proyección base 60/40: <strong>Keiko " + fmt(p60) + "</strong>. "}Break-even: {be}% Keiko. Si Sánchez supera {100-be:.1f}% en exterior, gana sin condiciones adicionales.</p>
-      <p>JEE ({fmt(a["net_jee"])} Keiko) y pendientes domésticos ({fmt(a["net_pendientes"])}) casi se compensan. El extranjero es el único bloque que puede cambiar el resultado.</p>
-      <div class="note"><strong>Nota:</strong> API oficial ONPE. {ext_nota} Patrón 2021: Keiko obtuvo ~62–65% en exterior.</div>
+      <h3>Veredicto — {nac["actas_pct"]:.3f}% actas procesadas</h3>
+      <p>Sánchez lidera el conteo doméstico por <strong>{lead_str} votos</strong> ({abs(lead)/18_000_000*100:.3f}pp). El extranjero ({ext_pct_val:.1f}% contado) está yendo <strong style="color:{ext_c}">{mu_ext}% para Keiko</strong>, muy por encima del {be}% que necesita.</p>
+      <p>JEE aporta <strong style="color:#f97316">{fmt(a["net_jee"])}</strong> netos a Keiko. Con la señal actual del exterior, la proyección central da <strong style="color:{winner_c}">{winner_proj} {fmt(proj_c)}</strong>.</p>
+      <p>Para que Sánchez gane necesita que el extranjero revierta de {mu_ext}% → ≥{100-be:.1f}% Sánchez. {"Con {ext_pct_val:.1f}% contado eso es cada vez más improbable." if ext_pct_val > 20 else "Aún hay mucho extranjero por contar."}</p>
+      <div class="note"><strong>Nota:</strong> API oficial ONPE. {ext_nota} Probabilidad basada en distribución normal sobre la señal del extranjero.</div>
     </div>
   </div>
 
-  <div class="ts">Datos: resultadosegundavuelta.onpe.gob.pe · {ts} · Actualización automática cada 20 min</div>
+  <div class="ts">Datos: resultadosegundavuelta.onpe.gob.pe · {ts} · Actualización automática cada 5 min</div>
 
 </div><!-- /tab-resumen -->
 

@@ -7,5 +7,14 @@
     "sanchez_pct": 50.086,
     "ext_pct": 5.5,
     "ext_lead": 2559
+  },
+  {
+    "ts": "2026-06-09 08:55",
+    "pct": 95.844,
+    "lead": -23282,
+    "keiko_pct": 49.935,
+    "sanchez_pct": 50.065,
+    "ext_pct": 26.0,
+    "ext_lead": 23902
   }
 ]
